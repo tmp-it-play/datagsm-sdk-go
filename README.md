@@ -2,7 +2,7 @@
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/jihoonwjj/datagsm-openapi-sdk-go.svg)](https://pkg.go.dev/github.com/jihoonwjj/datagsm-openapi-sdk-go)
 
-[DataGSM OpenAPI](https://docs.datagsm.kr/)를 위한 공식 Go SDK입니다.  
+[DataGSM OpenAPI](https://docs.datagsm.kr/)를 위한 파트너 Go SDK입니다.  
 학생·동아리·프로젝트·급식/학사 데이터를 Go 코드에서 간편하게 조회할 수 있습니다.
 
 ## 요구사항
