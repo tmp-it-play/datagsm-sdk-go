@@ -31,8 +31,8 @@ go.work.sum
 .idea/
 .vscode/
 
-# Claude Code
-.claude/
+# LLM Output
+**/command.log
 
 # Internal design docs
 docs/
