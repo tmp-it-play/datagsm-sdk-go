@@ -1,3 +1,3 @@
-module github.com/jihoonwjj/datagsm-openapi-sdk-go
+module github.com/tmp-it-play/datagsm-sdk-go
 
 go 1.25.0

@@ -1,80 +1,104 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
-	"github.com/jihoonwjj/datagsm-openapi-sdk-go/internal/apierror"
+	datagsm "github.com/tmp-it-play/datagsm-sdk-go"
 )
 
-// apiResponse는 DataGSM OpenAPI의 공통 응답 래퍼입니다.
-type apiResponse[T any] struct {
-	Status  string `json:"status"`
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-	Data    T      `json:"data"`
+type Client struct {
+	BaseURL string
+	HTTP    *http.Client
 }
 
-// DoGet은 HTTP GET 요청을 실행하고 응답 data 필드를 target에 JSON 디코딩합니다.
-//   - apiKey: X-API-KEY 헤더에 주입되는 인증 키
-//   - rawURL: 기본 URL + 경로 (예: "https://openapi.datagsm.kr/v1/students")
-//   - params: 쿼리 파라미터 맵
-//   - target: 응답 data 필드를 디코딩할 대상 포인터
-func DoGet(ctx context.Context, client *http.Client, rawURL string, apiKey string, params map[string]string, target any) error {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return fmt.Errorf("datagsm: invalid URL %q: %w", rawURL, err)
+func New(baseURL string, client *http.Client) (*Client, error) {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return nil, errors.New("datagsm: invalid base URL")
 	}
+	loopback := u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback()
+	if u.Scheme != "https" && !(u.Scheme == "http" && loopback) {
+		return nil, errors.New("datagsm: base URL requires HTTPS (HTTP is allowed on loopback)")
+	}
+	hc := http.Client{Timeout: 30 * time.Second}
+	if client != nil {
+		hc = *client
+	}
+	// Redirects can disclose API keys or replay token and write requests.
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{BaseURL: strings.TrimRight(baseURL, "/"), HTTP: &hc}, nil
+}
 
-	if len(params) > 0 {
-		q := u.Query()
-		for k, v := range params {
-			q.Set(k, v)
-		}
-		u.RawQuery = q.Encode()
+func (c *Client) Request(ctx context.Context, method, path string, query url.Values, body io.Reader) (*http.Request, error) {
+	rawURL := c.BaseURL + path
+	if len(query) > 0 {
+		rawURL += "?" + query.Encode()
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, body)
 	if err != nil {
-		return fmt.Errorf("datagsm: failed to create request: %w", err)
+		return nil, fmt.Errorf("datagsm: create request: %w", err)
 	}
-	req.Header.Set("X-API-KEY", apiKey)
 	req.Header.Set("Accept", "application/json")
+	return req, nil
+}
 
-	resp, err := client.Do(req)
+func (c *Client) Do(req *http.Request, target any, wrapped bool) error {
+	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return fmt.Errorf("datagsm: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	return decode(resp, target, wrapped)
+}
 
+func decode(resp *http.Response, target any, wrapped bool) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("datagsm: failed to read response body: %w", err)
+		return fmt.Errorf("datagsm: read response: %w", err)
 	}
-
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		var errResp struct {
-			Message string `json:"message"`
+		var failure struct {
+			Message     string `json:"message"`
+			Code        string `json:"error"`
+			Description string `json:"error_description"`
 		}
-		msg := http.StatusText(resp.StatusCode)
-		if json.Unmarshal(body, &errResp) == nil && errResp.Message != "" {
-			msg = errResp.Message
+		_ = json.Unmarshal(body, &failure)
+		message := failure.Description
+		if message == "" {
+			message = failure.Message
 		}
-		return &apierror.APIError{StatusCode: resp.StatusCode, Message: msg}
+		if message == "" {
+			message = http.StatusText(resp.StatusCode)
+		}
+		return &datagsm.APIError{StatusCode: resp.StatusCode, Code: failure.Code, Message: message, RetryAfter: resp.Header.Get("Retry-After")}
 	}
-
-	var wrapper apiResponse[json.RawMessage]
-	if err := json.Unmarshal(body, &wrapper); err != nil {
-		return fmt.Errorf("datagsm: failed to decode response: %w", err)
+	if target == nil {
+		return nil
 	}
-
-	if err := json.Unmarshal(wrapper.Data, target); err != nil {
-		return fmt.Errorf("datagsm: failed to decode data field: %w", err)
+	if wrapped {
+		var envelope struct {
+			Data json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal(body, &envelope); err != nil {
+			return fmt.Errorf("datagsm: decode envelope: %w", err)
+		}
+		body = envelope.Data
 	}
-
+	if len(body) == 0 || bytes.Equal(bytes.TrimSpace(body), []byte("null")) {
+		return errors.New("datagsm: response data is missing")
+	}
+	if err := json.Unmarshal(body, target); err != nil {
+		return fmt.Errorf("datagsm: decode response: %w", err)
+	}
 	return nil
 }
