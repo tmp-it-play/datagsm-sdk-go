@@ -3,7 +3,9 @@ package oauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -25,11 +27,19 @@ const (
 	AuthNone        AuthMethod = "none"
 )
 
+type RequestFormat string
+
+const (
+	RequestFormatForm RequestFormat = "form"
+	RequestFormatJSON RequestFormat = "json"
+)
+
 type Config struct {
 	ClientID             string
 	ClientSecret         string
 	RedirectURI          string
 	AuthMethod           AuthMethod
+	RequestFormat        RequestFormat
 	ClockSkew            time.Duration
 	AuthorizationBaseURL string
 	ResourceBaseURL      string
@@ -63,6 +73,13 @@ func NewClient(config Config) (*Client, error) {
 		}
 	default:
 		return nil, errors.New("datagsm: unsupported client authentication method")
+	}
+	switch config.RequestFormat {
+	case "":
+		config.RequestFormat = RequestFormatForm
+	case RequestFormatForm, RequestFormatJSON:
+	default:
+		return nil, errors.New("datagsm: unsupported token request format")
 	}
 	if config.AuthorizationBaseURL == "" {
 		config.AuthorizationBaseURL = DefaultAuthorizationURL
@@ -133,11 +150,23 @@ func (c *Client) tokenRequest(ctx context.Context, form url.Values, scopes []str
 	if c.config.AuthMethod == AuthSecretPost {
 		form.Set("client_secret", c.config.ClientSecret)
 	}
-	req, err := c.authorization.Request(ctx, http.MethodPost, "/v1/oauth/token", nil, strings.NewReader(form.Encode()))
+	contentType, body := "application/x-www-form-urlencoded", form.Encode()
+	if c.config.RequestFormat == RequestFormatJSON {
+		fields := make(map[string]string, len(form))
+		for key := range form {
+			fields[key] = form.Get(key)
+		}
+		encoded, err := json.Marshal(fields)
+		if err != nil {
+			return nil, fmt.Errorf("datagsm: encode token request: %w", err)
+		}
+		contentType, body = "application/json", string(encoded)
+	}
+	req, err := c.authorization.Request(ctx, http.MethodPost, "/v1/oauth/token", nil, strings.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Content-Type", contentType)
 	if c.config.AuthMethod == AuthSecretBasic {
 		req.SetBasicAuth(url.QueryEscape(c.config.ClientID), url.QueryEscape(c.config.ClientSecret))
 	}

@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -57,6 +58,30 @@ func TestTokenGrantsAndRawResponses(t *testing.T) {
 		if _, err := c.ClientCredentials(ctx); err == nil {
 			t.Fatal("accepted malformed token response")
 		}
+	}
+}
+
+func TestTokenRequestJSONFormat(t *testing.T) {
+	var contentType string
+	var fields map[string]string
+	c, err := NewClient(Config{ClientID: "client", ClientSecret: "test-secret", RequestFormat: RequestFormatJSON, HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		contentType = req.Header.Get("Content-Type")
+		if err := json.NewDecoder(req.Body).Decode(&fields); err != nil {
+			t.Fatal(err)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"access_token":"access","token_type":"Bearer","expires_in":3600}`))}, nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ClientCredentials(context.Background(), "app:read", "app:write"); err != nil {
+		t.Fatal(err)
+	}
+	if contentType != "application/json" || fields["grant_type"] != "client_credentials" || fields["client_id"] != "client" || fields["client_secret"] != "test-secret" || fields["scope"] != "app:read app:write" {
+		t.Fatalf("incorrect JSON token request: %s %v", contentType, fields)
+	}
+	if _, err := NewClient(Config{ClientID: "client", RequestFormat: "xml"}); err == nil {
+		t.Fatal("accepted unsupported request format")
 	}
 }
 
