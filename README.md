@@ -9,7 +9,7 @@ DataGSM의 OpenAPI, OAuth·OIDC, Event를 지원하는 파트너 Go SDK입니다
 Go 1.25 이상이 필요합니다.
 
 ```sh
-go get github.com/tmp-it-play/datagsm-sdk-go@v0.2.0
+go get github.com/tmp-it-play/datagsm-sdk-go@v0.3.0
 ```
 
 0.x 버전에서는 마이너 버전 업데이트에 호환되지 않는 API 변경이 포함될 수 있습니다. 업데이트 전에 [릴리스 노트](https://github.com/tmp-it-play/datagsm-sdk-go/releases)을 확인하세요.
@@ -152,9 +152,11 @@ discovery, err := client.Discovery(ctx)
 keys, err := client.JWKS(ctx)
 ```
 
-기본 인증은 시크릿이 있으면 `client_secret_post`, 없으면 `none`입니다. `AuthMethod: oauth.AuthSecretBasic`으로 HTTP Basic을 선택할 수 있습니다. 기본 인가 서버와 리소스 서버는 각각 `https://oauth.authorization.datagsm.kr`, `https://oauth.resource.datagsm.kr`입니다.
+기본 인증은 시크릿이 있으면 `client_secret_post`, 없으면 `none`입니다. `AuthMethod: oauth.AuthSecretBasic`으로 HTTP Basic을 선택할 수 있습니다. 토큰 요청 본문은 기본적으로 form 형식이며, `RequestFormat: oauth.RequestFormatJSON`으로 JSON 형식을 선택할 수 있습니다. 기본 인가 서버와 리소스 서버는 각각 `https://oauth.authorization.datagsm.kr`, `https://oauth.resource.datagsm.kr`입니다.
 
 `VerifyAccessToken`은 RS256 서명, `clientId`, 유효 시간과 필요한 권한 범위를 확인합니다. DataGSM 액세스 토큰에는 `iss`·`aud`가 없습니다. 키는 신뢰하는 인가 서버에서 받아 사용하며, 키 갱신과 캐시는 호출자가 관리합니다.
+
+JWT의 `iat`·`nbf`·`exp` 검증에는 기본 5초(`oauth.DefaultClockSkew`)의 허용오차를 적용합니다. `oauth.Config`의 `ClockSkew`로 값을 바꾸면 `client.JWKS`가 반환하는 키에 적용됩니다. 직접 만든 `JWKS`에는 `ClockSkew` 필드를 설정합니다. 음수를 지정하면 허용오차 없이 검증합니다.
 
 토큰과 세션의 저장·만료 처리는 애플리케이션에서 합니다. 갱신 요청은 같은 세션에서 직렬로 처리하고 새 Refresh Token으로 교체합니다. 자동 재시도나 자동 갱신은 하지 않습니다.
 
