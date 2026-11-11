@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/tmp-it-play/datagsm-sdk-go/internal/transport"
 )
@@ -29,6 +30,7 @@ type Config struct {
 	ClientSecret         string
 	RedirectURI          string
 	AuthMethod           AuthMethod
+	ClockSkew            time.Duration
 	AuthorizationBaseURL string
 	ResourceBaseURL      string
 	HTTPClient           *http.Client
@@ -194,6 +196,7 @@ func (c *Client) JWKS(ctx context.Context) (*JWKS, error) {
 	if err := c.authorization.Do(req, &result, false); err != nil {
 		return nil, err
 	}
+	result.ClockSkew = c.config.ClockSkew
 	return &result, nil
 }
 

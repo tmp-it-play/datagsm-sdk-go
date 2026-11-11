@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	datagsm "github.com/tmp-it-play/datagsm-sdk-go"
 )
@@ -56,6 +57,19 @@ func TestTokenGrantsAndRawResponses(t *testing.T) {
 		if _, err := c.ClientCredentials(ctx); err == nil {
 			t.Fatal("accepted malformed token response")
 		}
+	}
+}
+
+func TestJWKSUsesConfiguredClockSkew(t *testing.T) {
+	c, err := NewClient(Config{ClientID: "client", ClockSkew: 30 * time.Second, HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"keys":[]}`))}, nil
+	})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := c.JWKS(context.Background())
+	if err != nil || keys.ClockSkew != 30*time.Second {
+		t.Fatalf("%v %v", keys, err)
 	}
 }
 

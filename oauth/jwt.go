@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// DefaultClockSkew는 JWKS.ClockSkew가 0일 때 적용하는 JWT 시간 검증 허용오차입니다.
+const DefaultClockSkew = 5 * time.Second
+
 var ErrInvalidToken = errors.New("datagsm: invalid or expired JWT")
 
 type JWK struct {
@@ -27,6 +30,8 @@ type JWK struct {
 
 type JWKS struct {
 	Keys []JWK `json:"keys"`
+	// ClockSkew가 0이면 DefaultClockSkew를 적용하고, 음수이면 허용오차 없이 검증합니다.
+	ClockSkew time.Duration `json:"-"`
 }
 
 type IDTokenClaims struct {
@@ -64,7 +69,7 @@ func (keys JWKS) VerifyIDToken(token, issuer, clientID, nonce string, now time.T
 	if claims.Issuer != issuer || claims.Subject == "" || !slices.Contains(claims.Audience, clientID) ||
 		(claims.AuthorizedParty != "" || len(claims.Audience) > 1) && claims.AuthorizedParty != clientID ||
 		subtle.ConstantTimeCompare([]byte(claims.Nonce), []byte(nonce)) != 1 ||
-		!validTimes(claims.IssuedAt, claims.ExpiresAt, claims.NotBefore, now) {
+		!validTimes(claims.IssuedAt, claims.ExpiresAt, claims.NotBefore, now, keys.clockSkew()) {
 		return nil, ErrInvalidToken
 	}
 	return &claims, nil
@@ -79,7 +84,7 @@ func (keys JWKS) VerifyAccessToken(token, clientID string, requiredScopes []stri
 	if err := keys.verify(token, &claims); err != nil {
 		return nil, err
 	}
-	if claims.ClientID != clientID || claims.Subject == "" || !validTimes(claims.IssuedAt, claims.ExpiresAt, claims.NotBefore, now) {
+	if claims.ClientID != clientID || claims.Subject == "" || !validTimes(claims.IssuedAt, claims.ExpiresAt, claims.NotBefore, now, keys.clockSkew()) {
 		return nil, ErrInvalidToken
 	}
 	for _, scope := range requiredScopes {
@@ -90,8 +95,16 @@ func (keys JWKS) VerifyAccessToken(token, clientID string, requiredScopes []stri
 	return &claims, nil
 }
 
-func validTimes(issuedAt, expiresAt, notBefore int64, now time.Time) bool {
-	return !now.IsZero() && issuedAt > 0 && issuedAt <= now.Unix() && expiresAt > now.Unix() && expiresAt > issuedAt && notBefore <= now.Unix()
+func (keys JWKS) clockSkew() time.Duration {
+	if keys.ClockSkew == 0 {
+		return DefaultClockSkew
+	}
+	return max(keys.ClockSkew, 0)
+}
+
+func validTimes(issuedAt, expiresAt, notBefore int64, now time.Time, skew time.Duration) bool {
+	earliest, latest := now.Add(-skew).Unix(), now.Add(skew).Unix()
+	return !now.IsZero() && issuedAt > 0 && issuedAt <= latest && expiresAt > earliest && expiresAt > issuedAt && notBefore <= latest
 }
 
 func (keys JWKS) verify(token string, claims any) error {

@@ -18,7 +18,7 @@ func TestJWTValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := JWK{KeyType: "RSA", KeyID: "test-key", N: base64.RawURLEncoding.EncodeToString(private.N.Bytes()), E: base64.RawURLEncoding.EncodeToString(big.NewInt(int64(private.E)).Bytes())}
-	keys := JWKS{Keys: []JWK{key}}
+	keys := JWKS{Keys: []JWK{key}, ClockSkew: -1}
 	now := time.Unix(1800000000, 0)
 	sign := func(header any, claims any) string {
 		t.Helper()
@@ -103,5 +103,37 @@ func TestJWTValidation(t *testing.T) {
 	}
 	if _, err := keys.VerifyAccessToken(valid, "client", nil, now); err == nil {
 		t.Fatal("accepted ID token as access token")
+	}
+	skewSeconds := int64(DefaultClockSkew / time.Second)
+	for _, tt := range []struct {
+		name   string
+		skew   time.Duration
+		change func(*IDTokenClaims)
+		valid  bool
+	}{
+		{"default allows late expiry", 0, func(c *IDTokenClaims) { c.ExpiresAt = now.Unix() - skewSeconds + 1 }, true},
+		{"default rejects expiry at limit", 0, func(c *IDTokenClaims) { c.ExpiresAt = now.Unix() - skewSeconds }, false},
+		{"default allows future issue", 0, func(c *IDTokenClaims) { c.IssuedAt = now.Unix() + skewSeconds }, true},
+		{"default rejects future issue", 0, func(c *IDTokenClaims) { c.IssuedAt = now.Unix() + skewSeconds + 1 }, false},
+		{"default allows not before", 0, func(c *IDTokenClaims) { c.NotBefore = now.Unix() + skewSeconds }, true},
+		{"default rejects not before", 0, func(c *IDTokenClaims) { c.NotBefore = now.Unix() + skewSeconds + 1 }, false},
+		{"custom allows late expiry", 30 * time.Second, func(c *IDTokenClaims) { c.ExpiresAt = now.Unix() - 29 }, true},
+		{"custom rejects expiry at limit", 30 * time.Second, func(c *IDTokenClaims) { c.ExpiresAt = now.Unix() - 30 }, false},
+		{"negative disables skew", -1, func(c *IDTokenClaims) { c.ExpiresAt = now.Unix() }, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			claims := id
+			claims.IssuedAt = now.Unix() - 100
+			tt.change(&claims)
+			_, err := (JWKS{Keys: []JWK{key}, ClockSkew: tt.skew}).VerifyIDToken(sign(header, claims), DefaultAuthorizationURL, "client", "nonce", now)
+			if (err == nil) != tt.valid {
+				t.Fatalf("valid = %v, error = %v", tt.valid, err)
+			}
+		})
+	}
+	lateAccess := access
+	lateAccess.IssuedAt, lateAccess.ExpiresAt = now.Unix()-100, now.Unix()-1
+	if _, err := (JWKS{Keys: []JWK{key}}).VerifyAccessToken(sign(header, lateAccess), "client", nil, now); err != nil {
+		t.Fatal(err)
 	}
 }
